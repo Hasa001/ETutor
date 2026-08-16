@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 
+# Pre-download and cache all neural model weights into the container image
+RUN python src/warmup.py
+
 # Expose port (Render/Railway dynamically supply PORT)
 ENV PORT=8000
 EXPOSE 8000

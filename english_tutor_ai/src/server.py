@@ -27,47 +27,49 @@ config = TutorConfig()  # type: ignore[call-arg]
 memory_db: TutorMemory = None  # type: ignore
 tts_service: KokoroTTSService = None  # type: ignore
 vad_analyzer: SileroVADAnalyzer = None  # type: ignore
+models_loading_error: str | None = None
 
 models_ready_event = asyncio.Event()
 
 def _load_models_sync():
     """Heavy model initialization executed in a worker thread so the event loop never blocks."""
-    global memory_db, tts_service, vad_analyzer
+    global memory_db, tts_service, vad_analyzer, models_loading_error
     t0 = time.monotonic()
     logger.info("Background model pre-warming started in worker thread...")
 
-    # 1. Initialize Mem0 & embeddings (downloads from HF if needed)
-    logger.info("Loading Mem0 memory engine...")
-    memory_db = TutorMemory(config)
+    try:
+        # 1. Initialize Mem0 & embeddings (uses baked-in weights)
+        logger.info("Loading Mem0 memory engine...")
+        memory_db = TutorMemory(config)
 
-    # 2. Initialize Silero VAD
-    logger.info("Loading Silero VAD model...")
-    vad_analyzer = SileroVADAnalyzer(
-        params=VADParams(
-            confidence=config.VAD_CONFIDENCE,
-            start_secs=config.VAD_START_SECS,
-            stop_secs=config.VAD_STOP_SECS,
-            min_volume=config.VAD_MIN_VOLUME,
+        # 2. Initialize Silero VAD
+        logger.info("Loading Silero VAD model...")
+        vad_analyzer = SileroVADAnalyzer(
+            params=VADParams(
+                confidence=config.VAD_CONFIDENCE,
+                start_secs=config.VAD_START_SECS,
+                stop_secs=config.VAD_STOP_SECS,
+                min_volume=config.VAD_MIN_VOLUME,
+            )
         )
-    )
 
-    # 3. Initialize Kokoro TTS
-    logger.info("Loading Kokoro TTS model...")
-    tts_service = KokoroTTSService(
-        settings=KokoroTTSService.Settings(voice="af_heart")
-    )
+        # 3. Initialize Kokoro TTS
+        logger.info("Loading Kokoro TTS model...")
+        tts_service = KokoroTTSService(
+            settings=KokoroTTSService.Settings(voice="af_heart")
+        )
 
-    elapsed = time.monotonic() - t0
-    logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+        elapsed = time.monotonic() - t0
+        logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+    except Exception as e:
+        logger.error(f"Error during background model loading: {e}")
+        models_loading_error = str(e)
+    finally:
+        models_ready_event.set()
 
 async def init_models_background():
     """Async wrapper that offloads heavy CPU/network model loading to a background thread."""
-    try:
-        await asyncio.to_thread(_load_models_sync)
-    except Exception as e:
-        logger.error(f"Error during background model loading: {e}")
-    finally:
-        models_ready_event.set()
+    await asyncio.to_thread(_load_models_sync)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -91,10 +93,17 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """Health check endpoint for cloud load balancers and port scanners."""
+    is_ready = (
+        models_ready_event.is_set()
+        and memory_db is not None
+        and tts_service is not None
+        and vad_analyzer is not None
+    )
     return {
         "status": "healthy",
         "service": "ETutor AI Voice Backend",
-        "models_ready": models_ready_event.is_set(),
+        "models_ready": is_ready,
+        "error": models_loading_error,
     }
 
 @app.websocket("/ws")
@@ -102,9 +111,21 @@ async def health_check():
 async def websocket_endpoint(websocket: WebSocket, user_id: str = "default_student_1"):
     await websocket.accept()
     if not models_ready_event.is_set():
-        logger.info("Client connected while models are still warming up; waiting...")
-        await models_ready_event.wait()
-    logger.info(f"Client connected for user_id: {user_id}")
+        logger.info("Client connected while models are warming up; waiting up to 60s...")
+        try:
+            await asyncio.wait_for(models_ready_event.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            logger.error("Timed out waiting for models to load")
+            await websocket.close(code=1011, reason="Models initialization timeout")
+            return
+
+    if memory_db is None or tts_service is None or vad_analyzer is None:
+        err = models_loading_error or "Voice engine models are not ready."
+        logger.error(f"Connection rejected for {user_id}: {err}")
+        await websocket.close(code=1011, reason=f"Init error: {err}")
+        return
+
+    logger.info(f"Client connected and models verified ready for user_id: {user_id}")
 
     transport = FastAPIWebsocketTransport(
         websocket=websocket,
