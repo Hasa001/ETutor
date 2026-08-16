@@ -12,7 +12,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
-from pipecat.services.kokoro.tts import KokoroTTSService
+from pipecat.services.kokoro.tts import KOKORO_CACHE_DIR, KokoroTTSService
 from pipecat.workers.runner import WorkerRunner
 
 from dotenv import load_dotenv
@@ -52,11 +52,21 @@ def _load_models_sync():
         )
     )
 
-    # 3. Initialize Kokoro TTS
+    # 3. Initialize Kokoro TTS (prefer lightweight INT8 88MB model for 512MB RAM instances)
     logger.info("Loading Kokoro TTS model...")
-    tts_service = KokoroTTSService(
-        settings=KokoroTTSService.Settings(voice="af_heart")
-    )
+    int8_model = KOKORO_CACHE_DIR / "kokoro-v1.0.int8.onnx"
+    voices_file = KOKORO_CACHE_DIR / "voices-v1.0.bin"
+    if int8_model.exists():
+        logger.info(f"Using lightweight INT8 Kokoro model ({int8_model.name})")
+        tts_service = KokoroTTSService(
+            model_path=str(int8_model),
+            voices_path=str(voices_file) if voices_file.exists() else None,
+            settings=KokoroTTSService.Settings(voice="af_heart"),
+        )
+    else:
+        tts_service = KokoroTTSService(
+            settings=KokoroTTSService.Settings(voice="af_heart")
+        )
 
     elapsed = time.monotonic() - t0
     logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
