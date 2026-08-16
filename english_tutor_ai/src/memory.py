@@ -34,10 +34,10 @@ class TutorMemory:
                 },
             },
             "embedder": {
-                "provider": "huggingface",
+                "provider": "fastembed",
                 "config": {
                     "model": "sentence-transformers/all-MiniLM-L6-v2",
-                    "embedding_dims": 384,  # Prevents deprecated dimension query
+                    "embedding_dims": 384,
                 },
             },
             "vector_store": {

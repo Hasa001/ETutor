@@ -9,13 +9,15 @@ os.environ["MEM0_TELEMETRY"] = "False"
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 def warmup():
-    print("[Warmup] Pre-downloading sentence-transformers/all-MiniLM-L6-v2...")
+    print("[Warmup] Pre-downloading FastEmbed all-MiniLM-L6-v2 ONNX model...")
     try:
-        from sentence_transformers import SentenceTransformer
-        SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-        print("[Warmup] SentenceTransformer downloaded successfully.")
+        from fastembed import TextEmbedding
+        model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        # Trigger an embedding call to force full graph initialization
+        list(model.embed(["Hello world initialization"]))
+        print("[Warmup] FastEmbed model downloaded and initialized successfully.")
     except Exception as e:
-        print(f"[Warmup Warning] SentenceTransformer download: {e}")
+        print(f"[Warmup Warning] FastEmbed download: {e}")
 
     print("[Warmup] Pre-downloading Silero VAD model...")
     try:
@@ -33,7 +35,7 @@ def warmup():
     except Exception as e:
         print(f"[Warmup Warning] Kokoro TTS download: {e}")
 
-    print("[Warmup] Model bake-in complete!")
+    print("[Warmup] All models baked into Docker image successfully!")
 
 if __name__ == "__main__":
     warmup()
