@@ -37,39 +37,41 @@ def _load_models_sync():
     t0 = time.monotonic()
     logger.info("Background model pre-warming started in worker thread...")
 
+    # 1. Initialize Mem0 & embeddings (uses baked-in weights)
+    logger.info("Loading Mem0 memory engine...")
+    memory_db = TutorMemory(config)
+
+    # 2. Initialize Silero VAD
+    logger.info("Loading Silero VAD model...")
+    vad_analyzer = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=config.VAD_CONFIDENCE,
+            start_secs=config.VAD_START_SECS,
+            stop_secs=config.VAD_STOP_SECS,
+            min_volume=config.VAD_MIN_VOLUME,
+        )
+    )
+
+    # 3. Initialize Kokoro TTS
+    logger.info("Loading Kokoro TTS model...")
+    tts_service = KokoroTTSService(
+        settings=KokoroTTSService.Settings(voice="af_heart")
+    )
+
+    elapsed = time.monotonic() - t0
+    logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+
+async def init_models_background():
+    """Async wrapper that offloads heavy CPU/network model loading to a background thread."""
+    global models_loading_error
     try:
-        # 1. Initialize Mem0 & embeddings (uses baked-in weights)
-        logger.info("Loading Mem0 memory engine...")
-        memory_db = TutorMemory(config)
-
-        # 2. Initialize Silero VAD
-        logger.info("Loading Silero VAD model...")
-        vad_analyzer = SileroVADAnalyzer(
-            params=VADParams(
-                confidence=config.VAD_CONFIDENCE,
-                start_secs=config.VAD_START_SECS,
-                stop_secs=config.VAD_STOP_SECS,
-                min_volume=config.VAD_MIN_VOLUME,
-            )
-        )
-
-        # 3. Initialize Kokoro TTS
-        logger.info("Loading Kokoro TTS model...")
-        tts_service = KokoroTTSService(
-            settings=KokoroTTSService.Settings(voice="af_heart")
-        )
-
-        elapsed = time.monotonic() - t0
-        logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+        await asyncio.to_thread(_load_models_sync)
     except Exception as e:
         logger.error(f"Error during background model loading: {e}")
         models_loading_error = str(e)
     finally:
         models_ready_event.set()
-
-async def init_models_background():
-    """Async wrapper that offloads heavy CPU/network model loading to a background thread."""
-    await asyncio.to_thread(_load_models_sync)
+        logger.info(f"Models initialization complete (is_ready={memory_db is not None and tts_service is not None and vad_analyzer is not None})")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
