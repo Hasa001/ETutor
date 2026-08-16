@@ -30,36 +30,40 @@ vad_analyzer: SileroVADAnalyzer = None  # type: ignore
 
 models_ready_event = asyncio.Event()
 
-async def init_models_background():
-    """Pre-warm ML models in the background so the HTTP port opens instantly."""
+def _load_models_sync():
+    """Heavy model initialization executed in a worker thread so the event loop never blocks."""
     global memory_db, tts_service, vad_analyzer
     t0 = time.monotonic()
-    logger.info("Background model pre-warming started...")
+    logger.info("Background model pre-warming started in worker thread...")
 
+    # 1. Initialize Mem0 & embeddings (downloads from HF if needed)
+    logger.info("Loading Mem0 memory engine...")
+    memory_db = TutorMemory(config)
+
+    # 2. Initialize Silero VAD
+    logger.info("Loading Silero VAD model...")
+    vad_analyzer = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=config.VAD_CONFIDENCE,
+            start_secs=config.VAD_START_SECS,
+            stop_secs=config.VAD_STOP_SECS,
+            min_volume=config.VAD_MIN_VOLUME,
+        )
+    )
+
+    # 3. Initialize Kokoro TTS
+    logger.info("Loading Kokoro TTS model...")
+    tts_service = KokoroTTSService(
+        settings=KokoroTTSService.Settings(voice="af_heart")
+    )
+
+    elapsed = time.monotonic() - t0
+    logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+
+async def init_models_background():
+    """Async wrapper that offloads heavy CPU/network model loading to a background thread."""
     try:
-        # 1. Initialize Mem0 & embeddings
-        logger.info("Loading Mem0 memory engine...")
-        memory_db = TutorMemory(config)
-
-        # 2. Initialize Silero VAD
-        logger.info("Loading Silero VAD model...")
-        vad_analyzer = SileroVADAnalyzer(
-            params=VADParams(
-                confidence=config.VAD_CONFIDENCE,
-                start_secs=config.VAD_START_SECS,
-                stop_secs=config.VAD_STOP_SECS,
-                min_volume=config.VAD_MIN_VOLUME,
-            )
-        )
-
-        # 3. Initialize Kokoro TTS
-        logger.info("Loading Kokoro TTS model...")
-        tts_service = KokoroTTSService(
-            settings=KokoroTTSService.Settings(voice="af_heart")
-        )
-
-        elapsed = time.monotonic() - t0
-        logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+        await asyncio.to_thread(_load_models_sync)
     except Exception as e:
         logger.error(f"Error during background model loading: {e}")
     finally:
