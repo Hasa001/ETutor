@@ -70,6 +70,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for cloud load balancers and port scanners."""
+    return {"status": "healthy", "service": "ETutor AI Voice Backend"}
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, user_id: str = "default_student_1"):
     await websocket.accept()
@@ -123,4 +129,4 @@ if __name__ == "__main__":
     import os
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=port)

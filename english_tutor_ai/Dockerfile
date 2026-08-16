@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Ensure python finds modules in src/ and root
+ENV PYTHONPATH=/app/src:/app
+ENV PYTHONUNBUFFERED=1
+
 # Copy dependency specifications
 COPY requirements.txt .
 
@@ -21,9 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 
-# Expose port (Render/Railway use PORT env var, default to 8000)
+# Expose port (Render/Railway dynamically supply PORT)
 ENV PORT=8000
 EXPOSE 8000
 
-# Start FastAPI server
+# Start FastAPI server directly with python
 CMD ["python", "src/server.py"]
