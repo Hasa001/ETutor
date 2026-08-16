@@ -28,35 +28,48 @@ memory_db: TutorMemory = None  # type: ignore
 tts_service: KokoroTTSService = None  # type: ignore
 vad_analyzer: SileroVADAnalyzer = None  # type: ignore
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+models_ready_event = asyncio.Event()
+
+async def init_models_background():
+    """Pre-warm ML models in the background so the HTTP port opens instantly."""
     global memory_db, tts_service, vad_analyzer
     t0 = time.monotonic()
-    logger.info("Initializing application resources...")
+    logger.info("Background model pre-warming started...")
 
-    # --- Pre-warm Mem0 (loads HuggingFace embedder + Qdrant) ---
-    logger.info("Loading Mem0 memory engine...")
-    memory_db = TutorMemory(config)
+    try:
+        # 1. Initialize Mem0 & embeddings
+        logger.info("Loading Mem0 memory engine...")
+        memory_db = TutorMemory(config)
 
-    # --- Pre-warm Silero VAD (downloads ONNX on first run) ---
-    logger.info("Loading Silero VAD model...")
-    vad_analyzer = SileroVADAnalyzer(
-        params=VADParams(
-            confidence=config.VAD_CONFIDENCE,
-            start_secs=config.VAD_START_SECS,
-            stop_secs=config.VAD_STOP_SECS,
-            min_volume=config.VAD_MIN_VOLUME,
+        # 2. Initialize Silero VAD
+        logger.info("Loading Silero VAD model...")
+        vad_analyzer = SileroVADAnalyzer(
+            params=VADParams(
+                confidence=config.VAD_CONFIDENCE,
+                start_secs=config.VAD_START_SECS,
+                stop_secs=config.VAD_STOP_SECS,
+                min_volume=config.VAD_MIN_VOLUME,
+            )
         )
-    )
 
-    # --- Pre-warm Kokoro TTS (loads neural TTS model into RAM) ---
-    logger.info("Loading Kokoro TTS model...")
-    tts_service = KokoroTTSService(
-        settings=KokoroTTSService.Settings(voice="af_heart")
-    )
+        # 3. Initialize Kokoro TTS
+        logger.info("Loading Kokoro TTS model...")
+        tts_service = KokoroTTSService(
+            settings=KokoroTTSService.Settings(voice="af_heart")
+        )
 
-    elapsed = time.monotonic() - t0
-    logger.success(f"All models pre-warmed in {elapsed:.1f}s. Server ready.")
+        elapsed = time.monotonic() - t0
+        logger.success(f"All models pre-warmed in {elapsed:.1f}s. Voice engine fully ready.")
+    except Exception as e:
+        logger.error(f"Error during background model loading: {e}")
+    finally:
+        models_ready_event.set()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start pre-warming in background task so port binds in <10ms
+    asyncio.create_task(init_models_background())
+    logger.info("FastAPI server started. Port is now open and listening.")
     yield
     logger.info("Cleaning up application resources...")
 
@@ -74,11 +87,18 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     """Health check endpoint for cloud load balancers and port scanners."""
-    return {"status": "healthy", "service": "ETutor AI Voice Backend"}
+    return {
+        "status": "healthy",
+        "service": "ETutor AI Voice Backend",
+        "models_ready": models_ready_event.is_set(),
+    }
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, user_id: str = "default_student_1"):
     await websocket.accept()
+    if not models_ready_event.is_set():
+        logger.info("Client connected while models are still warming up; waiting...")
+        await models_ready_event.wait()
     logger.info(f"Client connected for user_id: {user_id}")
 
     transport = FastAPIWebsocketTransport(
