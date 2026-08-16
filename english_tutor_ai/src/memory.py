@@ -81,19 +81,23 @@ class TutorMemory:
         )
         try:
             loop = asyncio.get_running_loop()
-            results = await loop.run_in_executor(
-                None,
-                lambda: self.memory.search(
-                    query=query,
-                    filters={"user_id": user_id},
-                    top_k=10,
-                )
+            results = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: self.memory.search(
+                        query=query,
+                        filters={"user_id": user_id},
+                        top_k=10,
+                    ),
+                ),
+                timeout=3.0,
             )
             memories = results.get("results", [])
-        except Exception:
-            logger.opt(exception=True).warning(
-                "Memory search failed for user '{}'; treating as new student",
+        except Exception as e:
+            logger.warning(
+                "Memory retrieval timed out/failed for '{}' ({}); treating as new student",
                 user_id,
+                e,
             )
             memories = []
 
