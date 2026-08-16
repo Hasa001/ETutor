@@ -98,6 +98,7 @@ async def health_check():
     }
 
 @app.websocket("/ws")
+@app.websocket("/")
 async def websocket_endpoint(websocket: WebSocket, user_id: str = "default_student_1"):
     await websocket.accept()
     if not models_ready_event.is_set():

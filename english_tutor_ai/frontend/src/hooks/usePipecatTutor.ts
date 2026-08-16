@@ -173,11 +173,25 @@ export function usePipecatTutor({
         //    This is the first software-layer echo defence; the backend gate is the second.
         await applyAudioConstraints();
 
-        // 3. Connect to the WebSocket transport
+        // 3. Normalize and sanitize WebSocket URL
+        // Converts https:// to wss://, http:// to ws://, and ensures /ws path exists
+        let cleanUrl = serverUrl.trim();
+        if (cleanUrl.startsWith('https://')) {
+          cleanUrl = cleanUrl.replace('https://', 'wss://');
+        } else if (cleanUrl.startsWith('http://')) {
+          cleanUrl = cleanUrl.replace('http://', 'ws://');
+        } else if (!cleanUrl.startsWith('ws://') && !cleanUrl.startsWith('wss://')) {
+          cleanUrl = `wss://${cleanUrl}`;
+        }
+        cleanUrl = cleanUrl.replace(/\/+$/, '');
+        if (!cleanUrl.endsWith('/ws')) {
+          cleanUrl = `${cleanUrl}/ws`;
+        }
+
         setStatus('connecting');
         const encodedId = encodeURIComponent(targetId);
         await clientRef.current.connect({
-          wsUrl: `${serverUrl}?user_id=${encodedId}`,
+          wsUrl: `${cleanUrl}?user_id=${encodedId}`,
         });
       } catch (err: unknown) {
         console.error('[Connection Error]:', err);
