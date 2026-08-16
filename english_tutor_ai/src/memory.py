@@ -20,11 +20,15 @@ class TutorMemory:
     """
 
     def __init__(self, config: TutorConfig) -> None:
+        if config.GROQ_API_KEY:
+            os.environ["GROQ_API_KEY"] = config.GROQ_API_KEY
+
         mem0_config: dict[str, Any] = {
             "llm": {
                 "provider": "groq",
                 "config": {
                     "model": "llama-3.1-8b-instant",
+                    "api_key": config.GROQ_API_KEY,
                     "temperature": 0.1,
                     "max_tokens": 400,
                 },
@@ -47,8 +51,12 @@ class TutorMemory:
         }
 
         logger.info("Initializing Mem0 with local Qdrant at '{}'", config.QDRANT_PATH)
-        self.memory: Memory = Memory.from_config(config_dict=mem0_config)
-        logger.success("Mem0 memory engine ready")
+        try:
+            self.memory: Memory = Memory.from_config(config_dict=mem0_config)
+            logger.success("Mem0 memory engine ready")
+        except Exception as e:
+            logger.error(f"Mem0 initialization failed ({e}). Memory will operate in fallback mode.")
+            self.memory = None  # type: ignore
 
     async def get_student_profile(self, user_id: str) -> str:
         """Retrieve the student's learning profile from long-term memory.
@@ -60,6 +68,13 @@ class TutorMemory:
             A formatted string summarising the student's past mistakes,
             strengths, and interests — or a default message for new students.
         """
+        if self.memory is None:
+            logger.info("Memory engine not initialized; treating as new student '{}'", user_id)
+            return (
+                "This is a new student. No prior history is available. "
+                "Start by asking about their English level and interests."
+            )
+
         query = (
             "What does the student struggle with in English? "
             "What are their interests?"
@@ -110,6 +125,10 @@ class TutorMemory:
             messages: The full conversation message list from the LLM context.
             user_id: Unique identifier for the student.
         """
+        if self.memory is None:
+            logger.warning("Memory engine not initialized; skipping memory persistence for '{}'", user_id)
+            return
+
         logger.info(
             "Extracting session memories ({} messages) for user '{}'",
             len(messages),
