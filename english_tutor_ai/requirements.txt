@@ -1,0 +1,12 @@
+pipecat-ai[silero,groq,kokoro,local]>=1.7.0
+mem0ai[extras,nlp]>=2.0.18
+qdrant-client>=1.19.0
+sentence-transformers>=3.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+loguru>=0.7.2
+fastapi>=0.115.0
+uvicorn>=0.30.0
+websockets>=13.0
+protobuf>=5.0.0
+soundfile>=0.12.1
