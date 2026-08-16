@@ -12,9 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Ensure python finds modules in src/ and root
+# Optimize for 0.1 CPU / 512MB RAM (prevent thread thrashing and memory bloat)
 ENV PYTHONPATH=/app/src:/app
 ENV PYTHONUNBUFFERED=1
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV TORCH_NUM_THREADS=1
+ENV PYTHONMALLOC=malloc
 
 # Copy dependency specifications
 COPY requirements.txt .
@@ -28,7 +33,7 @@ COPY src/ ./src/
 # Pre-download and cache all neural model weights into the container image
 RUN python src/warmup.py
 
-# Expose port (Render/Railway dynamically supply PORT)
+# Expose port (Render dynamically supplies PORT)
 ENV PORT=8000
 EXPOSE 8000
 

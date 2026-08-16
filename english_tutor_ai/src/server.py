@@ -171,6 +171,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str = "default_stude
         else:
             logger.info("No conversation to save")
 
+        # Explicit garbage collection to free memory on 512MB RAM instance
+        import gc
+        gc.collect()
+
 if __name__ == "__main__":
     import os
     import uvicorn

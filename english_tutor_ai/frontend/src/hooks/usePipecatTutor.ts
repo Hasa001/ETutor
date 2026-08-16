@@ -188,6 +188,26 @@ export function usePipecatTutor({
           cleanUrl = `${cleanUrl}/ws`;
         }
 
+        // 4. Pre-flight health probe to check server status or wake from Render free-tier sleep
+        const httpUrl = cleanUrl
+          .replace(/^wss:\/\//, 'https://')
+          .replace(/^ws:\/\//, 'http://')
+          .replace(/\/ws$/, '/health');
+
+        try {
+          const res = await fetch(httpUrl, { signal: AbortSignal.timeout(3000) });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.error) {
+              setErrorMessage(`Server configuration error: ${data.error}`);
+              setStatus('error');
+              return;
+            }
+          }
+        } catch {
+          // If pre-flight ping times out, continue to WebSocket attempt
+        }
+
         setStatus('connecting');
         const encodedId = encodeURIComponent(targetId);
         await clientRef.current.connect({
