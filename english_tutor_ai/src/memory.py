@@ -1,62 +1,55 @@
+"""Student long-term memory engine — optimized for low-memory cloud deployments."""
+
 import asyncio
+import json
 import os
+from pathlib import Path
 from typing import Any
 
+from groq import AsyncGroq
 from loguru import logger
-
-# Disable anonymous Mem0 PostHog telemetry to prevent duplicate client logs
-os.environ["MEM0_TELEMETRY"] = "False"
-
-from mem0 import Memory  # PyPI package is 'mem0ai', but module is 'mem0'
 
 from config import TutorConfig
 
+MEMORY_FILE_PATH = Path("student_memories.json")
+
 
 class TutorMemory:
-    """Wraps Mem0 for student-specific long-term memory.
+    """Manages student-specific long-term memory and learning profiles.
 
-    Uses Groq as the LLM for fact extraction, HuggingFace for local
-    embeddings, and a local Qdrant instance for vector storage.
+    Uses cloud-based Groq LLM for fact extraction and lightweight persistent
+    JSON storage for memory recall, eliminating local vector store RAM overhead.
     """
 
     def __init__(self, config: TutorConfig) -> None:
+        self.config = config
+        self._groq_client: AsyncGroq | None = None
         if config.GROQ_API_KEY:
-            os.environ["GROQ_API_KEY"] = config.GROQ_API_KEY
+            try:
+                self._groq_client = AsyncGroq(api_key=config.GROQ_API_KEY)
+            except Exception as e:
+                logger.warning(f"Failed to initialize Groq client for memory: {e}")
 
-        mem0_config: dict[str, Any] = {
-            "llm": {
-                "provider": "groq",
-                "config": {
-                    "model": "llama-3.1-8b-instant",
-                    "api_key": config.GROQ_API_KEY,
-                    "temperature": 0.1,
-                    "max_tokens": 400,
-                },
-            },
-            "embedder": {
-                "provider": "fastembed",
-                "config": {
-                    "model": "sentence-transformers/all-MiniLM-L6-v2",
-                    "embedding_dims": 384,
-                },
-            },
-            "vector_store": {
-                "provider": "qdrant",
-                "config": {
-                    "path": config.QDRANT_PATH,
-                    "embedding_model_dims": 384,  # CRITICAL: matches MiniLM-L6-v2
-                },
-            },
-            "version": "v1.1",
-        }
+        self._memories: dict[str, list[str]] = self._load_storage()
+        logger.success(f"TutorMemory initialized with {len(self._memories)} student profiles")
 
-        logger.info("Initializing Mem0 with local Qdrant at '{}'", config.QDRANT_PATH)
+    def _load_storage(self) -> dict[str, list[str]]:
+        """Load stored memories from JSON file."""
+        if MEMORY_FILE_PATH.exists():
+            try:
+                with open(MEMORY_FILE_PATH, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Could not load memory file ({e}); starting fresh.")
+        return {}
+
+    def _save_storage(self) -> None:
+        """Persist memories to JSON file."""
         try:
-            self.memory: Memory = Memory.from_config(config_dict=mem0_config)
-            logger.success("Mem0 memory engine ready")
+            with open(MEMORY_FILE_PATH, "w", encoding="utf-8") as f:
+                json.dump(self._memories, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"Mem0 initialization failed ({e}). Memory will operate in fallback mode.")
-            self.memory = None  # type: ignore
+            logger.error(f"Failed to persist student memories: {e}")
 
     async def get_student_profile(self, user_id: str) -> str:
         """Retrieve the student's learning profile from long-term memory.
@@ -68,39 +61,7 @@ class TutorMemory:
             A formatted string summarising the student's past mistakes,
             strengths, and interests — or a default message for new students.
         """
-        if self.memory is None:
-            logger.info("Memory engine not initialized; treating as new student '{}'", user_id)
-            return (
-                "This is a new student. No prior history is available. "
-                "Start by asking about their English level and interests."
-            )
-
-        query = (
-            "What does the student struggle with in English? "
-            "What are their interests?"
-        )
-        try:
-            loop = asyncio.get_running_loop()
-            results = await asyncio.wait_for(
-                loop.run_in_executor(
-                    None,
-                    lambda: self.memory.search(
-                        query=query,
-                        filters={"user_id": user_id},
-                        top_k=10,
-                    ),
-                ),
-                timeout=3.0,
-            )
-            memories = results.get("results", [])
-        except Exception as e:
-            logger.warning(
-                "Memory retrieval timed out/failed for '{}' ({}); treating as new student",
-                user_id,
-                e,
-            )
-            memories = []
-
+        memories = self._memories.get(user_id, [])
         if not memories:
             logger.info("No prior memories found for user '{}'", user_id)
             return (
@@ -108,12 +69,9 @@ class TutorMemory:
                 "Start by asking about their English level and interests."
             )
 
-        profile_lines: list[str] = [
-            f"- {mem['memory']}" for mem in memories if "memory" in mem
-        ]
-        profile = "\n".join(profile_lines)
+        profile = "\n".join(memories)
         logger.info(
-            "Loaded {} memories for user '{}'", len(profile_lines), user_id
+            "Loaded {} memory points for user '{}'", len(memories), user_id
         )
         return profile
 
@@ -122,15 +80,14 @@ class TutorMemory:
     ) -> None:
         """Extract and persist facts from the conversation into long-term memory.
 
-        Runs the blocking Mem0 `.add()` call inside a threadpool executor
-        so it does not block the async event loop.
+        Uses Groq cloud API to extract key language corrections and student interests.
 
         Args:
             messages: The full conversation message list from the LLM context.
             user_id: Unique identifier for the student.
         """
-        if self.memory is None:
-            logger.warning("Memory engine not initialized; skipping memory persistence for '{}'", user_id)
+        if not self._groq_client or len(messages) < 2:
+            logger.info("Skipping memory extraction: insufficient conversation history.")
             return
 
         logger.info(
@@ -138,21 +95,60 @@ class TutorMemory:
             len(messages),
             user_id,
         )
-        loop = asyncio.get_running_loop()
+
+        # Filter out system prompts to keep context clean
+        chat_transcript = [
+            f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}"
+            for m in messages
+            if m.get("role") in ("user", "assistant") and m.get("content")
+        ]
+
+        if not chat_transcript:
+            return
+
+        transcript_text = "\n".join(chat_transcript[-10:])  # Last 10 turns
+
+        extraction_prompt = (
+            "You are an English language tutor analyzing a student conversation.\n"
+            "Extract 2 to 4 concise bullet points summarizing:\n"
+            "- English grammar/vocabulary/pronunciation mistakes made by the student and how to correct them\n"
+            "- Topics and personal interests mentioned by the student\n"
+            "- The student's estimated English level (e.g. Beginner, Intermediate, Advanced)\n\n"
+            "Format requirements:\n"
+            "- Return ONLY bullet points starting with '- '\n"
+            "- Keep each bullet point under 20 words\n"
+            "- Do not write intro or outro text\n\n"
+            f"Conversation Transcript:\n{transcript_text}"
+        )
+
         try:
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.memory.add(messages=messages, user_id=user_id),
+            response = await asyncio.wait_for(
+                self._groq_client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[{"role": "user", "content": extraction_prompt}],
+                    temperature=0.2,
+                    max_tokens=250,
+                ),
+                timeout=8.0,
             )
-            added = [
-                r for r in result.get("results", []) if r.get("event") == "ADD"
+
+            raw_content = response.choices[0].message.content or ""
+            new_bullets = [
+                line.strip()
+                for line in raw_content.splitlines()
+                if line.strip().startswith("-")
             ]
-            logger.success(
-                "Persisted {} new memories for user '{}'",
-                len(added),
-                user_id,
-            )
-        except Exception:
-            logger.opt(exception=True).error(
-                "Failed to extract session memories for user '{}'", user_id
-            )
+
+            if new_bullets:
+                existing = self._memories.get(user_id, [])
+                # Keep up to 10 most recent memory bullets to avoid token bloat
+                updated = (existing + new_bullets)[-10:]
+                self._memories[user_id] = updated
+                self._save_storage()
+                logger.success(
+                    "Persisted {} new memories for user '{}'",
+                    len(new_bullets),
+                    user_id,
+                )
+        except Exception as e:
+            logger.warning(f"Memory extraction failed for '{user_id}': {e}")

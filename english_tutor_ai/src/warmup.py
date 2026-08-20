@@ -4,23 +4,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
-# Disable telemetry
-os.environ["MEM0_TELEMETRY"] = "False"
-
 # Ensure src is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 def warmup():
-    print("[Warmup] 1/4 Pre-downloading FastEmbed ONNX model...")
-    try:
-        from fastembed import TextEmbedding
-        model = TextEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        list(model.embed(["Hello world warm up"]))
-        print("[Warmup] FastEmbed model initialized successfully.")
-    except Exception as e:
-        print(f"[Warmup Warning] FastEmbed download: {e}")
-
-    print("[Warmup] 2/4 Pre-downloading Silero VAD model...")
+    print("[Warmup] 1/3 Pre-downloading Silero VAD model...")
     try:
         from pipecat.audio.vad.silero import SileroVADAnalyzer
         SileroVADAnalyzer()
@@ -28,7 +16,7 @@ def warmup():
     except Exception as e:
         print(f"[Warmup Warning] Silero VAD download: {e}")
 
-    print("[Warmup] 3/4 Pre-downloading lightweight Kokoro INT8 (88MB) ONNX model...")
+    print("[Warmup] 2/3 Pre-downloading lightweight Kokoro INT8 (88MB) ONNX model...")
     try:
         from pipecat.services.kokoro.tts import KOKORO_CACHE_DIR, KokoroTTSService
         KOKORO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -59,7 +47,7 @@ def warmup():
     except Exception as e:
         print(f"[Warmup Warning] Kokoro TTS download: {e}")
 
-    print("[Warmup] 4/4 Pre-warming SmartTurn & pipeline components...")
+    print("[Warmup] 3/3 Pre-warming SmartTurn & pipeline components...")
     try:
         from pipecat.processors.aggregators.llm_context import LLMContext
         from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
