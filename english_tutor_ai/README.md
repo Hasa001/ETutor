@@ -75,6 +75,3 @@ To run tests:
 ```bash
 uv run pytest tests/ -v
 ```
-
-## License
-MIT
