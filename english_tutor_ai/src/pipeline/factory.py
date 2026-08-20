@@ -78,11 +78,11 @@ async def create_tutor_pipeline(
 
     llm = ResilientGroqLLMService(
         api_key=config.GROQ_API_KEY,
-        primary_model="llama-3.3-70b-versatile",
-        fallback_models=["llama-3.1-8b-instant", "gemma2-9b-it"],
+        primary_model="groq/compound",
+        fallback_models=["groq/compound-mini", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"],
         max_tokens=200,
     )
-    logger.info("LLM service ready (Resilient Groq LLaMA 3.3 70B with 8B Instant fallback)")
+    logger.info("LLM service ready (Resilient Groq Compound with Instant fallbacks)")
 
     logger.info("Reusing pre-warmed Kokoro TTS service")
 

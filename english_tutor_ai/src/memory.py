@@ -124,7 +124,7 @@ class TutorMemory:
         try:
             response = await asyncio.wait_for(
                 self._groq_client.chat.completions.create(
-                    model="llama-3.1-8b-instant",
+                    model="groq/compound-mini",
                     messages=[{"role": "user", "content": extraction_prompt}],
                     temperature=0.2,
                     max_tokens=250,
